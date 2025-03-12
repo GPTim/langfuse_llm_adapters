@@ -1,10 +1,10 @@
 {
-    "name": "My plugin",
+    "name": "Llm Openai-Like With Langfuse",
     "version": "0.0.1",
-    "description": "Description of my_plugin.",
-    "author_name": "Me",
+    "description": "New LLM Openai-like with Langfuse integration.",
+    "author_name": "p.argilloni@reply.it",
     "author_url": "https://mywebsite.me",
-    "plugin_url": "https://github.com/my_name/my_plugin",
-    "tags": "cat, template, example",
-    "thumb": "https://raw.githubusercontent.com/my_repo_path/my_plugin.png"
+    "plugin_url": "https://github.com/my_name/llm_openai-like_with_langfuse",
+    "tags": "cat, template, llm",
+    "thumb": "https://raw.githubusercontent.com/my_repo_path/llm_openai-like_with_langfuse.png"
 }
