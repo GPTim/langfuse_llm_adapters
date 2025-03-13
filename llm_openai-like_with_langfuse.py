@@ -39,7 +39,7 @@ class LLMOllamaConfigWithLangfuse(LLMSettings):
     langfuse_public_key: str
     langfuse_secret_key: str
     max_tokens: int = 2048
-    n: int = 64
+    n: int = 1
     frequency_penalty: float = 1.1
     temperature: float = 0.8
     streaming: bool = True
