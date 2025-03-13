@@ -56,11 +56,13 @@ class LLMOllamaConfigWithLangfuse(LLMSettings):
 
 @hook  # default priority = 1 
 def before_cat_reads_message(user_message_json, cat: StrayCat):
-    llm: CustomOllamaWithLangfuse = cat._llm
-    for callback in llm.callbacks:
-        if isinstance(callback, CallbackHandler):
-            callback.user_id = cat.user_id
-            callback.session_id = cat.user_data.id
+    if isinstance(cat._llm, CustomOllamaWithLangfuse):
+        llm: CustomOllamaWithLangfuse = cat._llm
+        if hasattr(llm, 'callbacks'):
+            for callback in llm.callbacks:
+                if isinstance(callback, CallbackHandler):
+                    callback.user_id = cat.user_id
+                    callback.session_id = cat.user_data.id
 
     return user_message_json
 
