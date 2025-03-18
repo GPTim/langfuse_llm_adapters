@@ -11,9 +11,9 @@ from cat.looking_glass.stray_cat import StrayCat
 
 class CustomOllamaWithLangfuse(ChatOpenAI):
 
-    langfuse_public_key = None
-    langfuse_secret_key = None
-    langfuse_host = None
+    langfuse_public_key = ''
+    langfuse_secret_key = ''
+    langfuse_host = ''
 
     def __init__(self, **kwargs: Any) -> None:
         if kwargs["base_url"].endswith("/"):
