@@ -1,7 +1,7 @@
 from typing import Any, List, Type
 
-from langchain_openai import ChatOpenAI
 from pydantic import ConfigDict
+from cat.factory.custom_llm import CustomOllama
 from cat.mad_hatter.decorators import hook
 from cat.factory.llm import LLMSettings
 from cat.log import log
@@ -9,7 +9,7 @@ from langfuse.callback import CallbackHandler
 from cat.looking_glass.stray_cat import StrayCat
 
 
-class CustomOllamaWithLangfuse(ChatOpenAI):
+class CustomOllamaWithLangfuse(CustomOllama):
 
     langfuse_public_key = ''
     langfuse_secret_key = ''
@@ -19,16 +19,16 @@ class CustomOllamaWithLangfuse(ChatOpenAI):
         if kwargs["base_url"].endswith("/"):
             kwargs["base_url"] = kwargs["base_url"][:-1]
         
-        kwargs['model_kwargs'] = {
-            "frequency_penalty": kwargs["frequency_penalty"]
-        }
+        # kwargs['model_kwargs'] = {
+        #     "frequency_penalty": kwargs["frequency_penalty"]
+        # }
         langfuse_public_key=kwargs["langfuse_public_key"]
         langfuse_secret_key=kwargs["langfuse_secret_key"]
         langfuse_host=kwargs["langfuse_host"]
         kwargs.pop('langfuse_public_key', None)
         kwargs.pop('langfuse_secret_key', None)
         kwargs.pop('langfuse_host', None)
-        kwargs.pop('frequency_penalty', None)
+        # kwargs.pop('frequency_penalty', None)
         super().__init__(api_key='ollama', **kwargs)
         self.langfuse_public_key=langfuse_public_key
         self.langfuse_secret_key=langfuse_secret_key
@@ -38,15 +38,17 @@ class CustomOllamaWithLangfuse(ChatOpenAI):
 
 class LLMOllamaConfigWithLangfuse(LLMSettings):
     base_url: str
-    model_name: str = "llama3"
+    model: str = "llama3"
+    num_ctx: int = 2048
     langfuse_host: str
     langfuse_public_key: str
     langfuse_secret_key: str
-    max_tokens: int = 2048
-    n: int = 1
-    frequency_penalty: float = 1.1
+    repeat_last_n: int = 64
+    repeat_penalty: float = 1.1
+    # n: int = 1
+    # frequency_penalty: float = 1.1
     temperature: float = 0.8
-    streaming: bool = True
+    # streaming: bool = True
 
     _pyclass: Type = CustomOllamaWithLangfuse
     
