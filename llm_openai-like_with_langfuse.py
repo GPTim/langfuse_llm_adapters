@@ -1,4 +1,5 @@
 from typing import Any, List, Type
+import re
 
 from pydantic import ConfigDict
 from cat.factory.custom_llm import CustomOllama
@@ -9,30 +10,51 @@ from langfuse.callback import CallbackHandler
 from cat.looking_glass.stray_cat import StrayCat
 
 
+
 class CustomOllamaWithLangfuse(CustomOllama):
 
     langfuse_public_key = ''
     langfuse_secret_key = ''
     langfuse_host = ''
+    reasoning = False
+    hide_reasoning_section = True
 
     def __init__(self, **kwargs: Any) -> None:
         if kwargs["base_url"].endswith("/"):
             kwargs["base_url"] = kwargs["base_url"][:-1]
         
-        # kwargs['model_kwargs'] = {
-        #     "frequency_penalty": kwargs["frequency_penalty"]
-        # }
         langfuse_public_key=kwargs["langfuse_public_key"]
         langfuse_secret_key=kwargs["langfuse_secret_key"]
         langfuse_host=kwargs["langfuse_host"]
+        reasoning=kwargs["reasoning"]
+        hide_reasoning_section=kwargs["hide_reasoning_section"]
+
         kwargs.pop('langfuse_public_key', None)
         kwargs.pop('langfuse_secret_key', None)
         kwargs.pop('langfuse_host', None)
-        # kwargs.pop('frequency_penalty', None)
+
         super().__init__(api_key='ollama', **kwargs)
         self.langfuse_public_key=langfuse_public_key
         self.langfuse_secret_key=langfuse_secret_key
         self.langfuse_host=langfuse_host
+        self.reasoning=reasoning
+        self.hide_reasoning_section=hide_reasoning_section
+
+
+    def invoke(self, input, config = None, *, stop = None, **kwargs):
+        # input.messages[0] is HumanMessage type
+        if not self.reasoning:
+            # prepending "/no_think" to each inputs in order to avoid reasoning by default (this is true for qwen3, I know you are disappointed...)
+            # in qwen3 the thinking mode is enabled by default
+            input.messages[0].content = "/no_think\n" + input.messages[0].content
+        
+        to_ret = super().invoke(input, config, stop=stop, **kwargs)
+
+        if self.hide_reasoning_section:
+            regex = re.compile(r'<think\b[^>]*>.*?</think>\n?', flags=re.DOTALL)
+            to_ret.content = regex.sub('', to_ret.content)
+
+        return to_ret
 
 
 
@@ -45,10 +67,9 @@ class LLMOllamaConfigWithLangfuse(LLMSettings):
     langfuse_secret_key: str
     repeat_last_n: int = 64
     repeat_penalty: float = 1.1
-    # n: int = 1
-    # frequency_penalty: float = 1.1
     temperature: float = 0.8
-    # streaming: bool = True
+    reasoning: bool = False
+    hide_reasoning_section: bool = True
 
     _pyclass: Type = CustomOllamaWithLangfuse
     
@@ -75,7 +96,7 @@ def before_cat_reads_message(user_message_json, cat: StrayCat):
     return user_message_json
 
 
-@hook  # default priority = 1
+@hook
 def before_cat_sends_message(message, cat: StrayCat):
     if isinstance(cat._llm, CustomOllamaWithLangfuse):
         this_llm = cat._llm
