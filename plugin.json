@@ -1,8 +1,8 @@
 {
-    "name": "Llm Openai-Like With Langfuse",
-    "version": "0.0.1",
-    "description": "New LLM Openai-like with Langfuse integration.",
-    "author_name": "p.argilloni@reply.it",
+    "name": "Ollama with Langfuse",
+    "version": "0.1.0",
+    "description": "New Ollama adapter with Langfuse integration.",
+    "author_name": "Paolo Argilloni, Alessandro Spallina",
     "author_url": "https://mywebsite.me",
     "plugin_url": "https://github.com/my_name/llm_openai-like_with_langfuse",
     "tags": "cat, template, llm",

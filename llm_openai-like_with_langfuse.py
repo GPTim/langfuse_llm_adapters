@@ -1,12 +1,13 @@
 from typing import Any, List, Type
 import re
-
 from pydantic import ConfigDict
+from langchain_core.prompt_values import ChatPromptValue
+from langfuse.callback import CallbackHandler
+
 from cat.factory.custom_llm import CustomOllama
 from cat.mad_hatter.decorators import hook
 from cat.factory.llm import LLMSettings
 from cat.log import log
-from langfuse.callback import CallbackHandler
 from cat.looking_glass.stray_cat import StrayCat
 
 
@@ -46,7 +47,13 @@ class CustomOllamaWithLangfuse(CustomOllama):
         if not self.reasoning:
             # prepending "/no_think" to each inputs in order to avoid reasoning by default (this is true for qwen3, I know you are disappointed...)
             # in qwen3 the thinking mode is enabled by default
-            input.messages[0].content = "/no_think\n" + input.messages[0].content
+            if type(input) is list and type(input[0]) is dict:
+                input[0]['content'] = f"/no_think\n{input[0]['content']}"
+            elif type(input) is ChatPromptValue:
+                input.messages[0].content = "/no_think\n" + input.messages[0].content
+            else:
+                log.warning("Unable to set /no_think, this might break GPTIM a little bit")
+                
         
         to_ret = super().invoke(input, config, stop=stop, **kwargs)
 
