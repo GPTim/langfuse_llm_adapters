@@ -1,10 +1,10 @@
 {
-    "name": "Ollama with Langfuse",
-    "version": "0.1.0",
-    "description": "New Ollama adapter with Langfuse integration.",
+    "name": "Langfuse LLM Adapters",
+    "version": "1.0.0",
+    "description": "LLM adapters (Ollama, vLLM) with observability in mind.",
     "author_name": "Paolo Argilloni, Alessandro Spallina",
-    "author_url": "https://mywebsite.me",
-    "plugin_url": "https://github.com/my_name/llm_openai-like_with_langfuse",
-    "tags": "cat, template, llm",
+    "author_url": "https://github.com/GPTim",
+    "plugin_url": "https://github.com/GPTim/langfuse_llm_adapters",
+    "tags": "langfuse,llm,adapters,observability",
     "thumb": "https://raw.githubusercontent.com/my_repo_path/llm_openai-like_with_langfuse.png"
 }
