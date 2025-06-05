@@ -1,6 +1,6 @@
 {
     "name": "Langfuse LLM Adapters",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "LLM adapters (Ollama, vLLM) with observability in mind.",
     "author_name": "Paolo Argilloni, Alessandro Spallina",
     "author_url": "https://github.com/GPTim",
