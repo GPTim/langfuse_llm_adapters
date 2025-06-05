@@ -107,7 +107,9 @@ class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
             "url": kwargs.get("url"),
             "model_name": kwargs.get("model_name"),
             "temperature": kwargs.get("temperature"),
-            "streaming": kwargs.get("streaming")
+            "streaming": kwargs.get("streaming"),
+            "timeout": kwargs.get("timeout"),
+            "max_tokens": kwargs.get("max_tokens")
         }
 
         CustomOpenAI.__init__(self, **openai_params)
@@ -152,6 +154,8 @@ class LLMOpenaiLikeConfigWithLangfuse(LLMSettings):
     url: str
     model_name: str = "llama3"
     temperature: float = 0.1
+    timeout: float = 3600.0
+    max_tokens: int = 32768
     langfuse_host: str
     langfuse_public_key: str
     langfuse_secret_key: str
