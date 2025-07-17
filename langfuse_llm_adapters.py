@@ -1,22 +1,20 @@
 from typing import Any, List, Type
-import re
+import re, os
 from pydantic import ConfigDict
 from langchain_core.prompt_values import ChatPromptValue
+from langfuse import Langfuse
 from langfuse.callback import CallbackHandler
 
 from typing import Any, List, Type, Optional
 import re
 from pydantic import ConfigDict, field_validator, Field, model_validator, BaseModel
 from langchain_core.prompt_values import ChatPromptValue
-from langfuse.callback import CallbackHandler
 
 from cat.factory.custom_llm import CustomOllama, CustomOpenAI
 from cat.mad_hatter.decorators import hook
 from cat.factory.llm import LLMSettings
 from cat.log import log
 from cat.looking_glass.stray_cat import StrayCat
-
-
 
 
 class ReasoningLLMMixin:
@@ -54,8 +52,6 @@ class ReasoningLLMMixin:
         return result
 
 
-
-
 class CustomOllamaWithLangfuse(ReasoningLLMMixin, CustomOllama):
     """Ollama LLM with Langfuse integration."""
     
@@ -84,8 +80,6 @@ class CustomOllamaWithLangfuse(ReasoningLLMMixin, CustomOllama):
         self.reasoning = kwargs.get('reasoning', False)
         self.hide_reasoning_section = kwargs.get('hide_reasoning_section', True)
         self.callbacks = []
-    
-
 
 
 class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
@@ -121,8 +115,6 @@ class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
         self.reasoning = kwargs.get('reasoning', False)
         self.hide_reasoning_section = kwargs.get('hide_reasoning_section', True)
         self.callbacks = []
-    
-        
 
 
 class LLMOllamaConfigWithLangfuse(LLMSettings):
@@ -148,8 +140,6 @@ class LLMOllamaConfigWithLangfuse(LLMSettings):
     )
 
 
-
-
 class LLMOpenaiLikeConfigWithLangfuse(LLMSettings):
     url: str
     model_name: str = "llama3"
@@ -173,28 +163,34 @@ class LLMOpenaiLikeConfigWithLangfuse(LLMSettings):
     )
 
 
-
-
 @hook
 def before_cat_reads_message(user_message_json, cat: StrayCat):
     """Hook to set up Langfuse callbacks before processing user message."""
-    
+
     if hasattr(cat._llm, "langfuse_public_key"):
         try:
-            langfuse_handler = CallbackHandler(
-                public_key=cat._llm.langfuse_public_key,
-                secret_key=cat._llm.langfuse_secret_key,
-                host=cat._llm.langfuse_host,
-                user_id=cat.user_id,
-                session_id=cat.user_data.id
+            # Get user session ID (Keycloak session ID) and groups (-> tags)
+            user_info = getattr(cat.working_memory.user_message_json, "user", None)
+            user_groups = []
+            if user_info:
+                sid = user_info.get("sid", cat.user_data.id)
+                user_groups = user_info.get('gptim', {}).get("groups", [])
+            else:
+                sid = cat.user_data.id
+            # See: https://github.com/orgs/langfuse/discussions/2658
+            os.environ["LANGFUSE_HOST"] = cat._llm.langfuse_host
+            os.environ["LANGFUSE_PUBLIC_KEY"] = cat._llm.langfuse_public_key
+            os.environ["LANGFUSE_SECRET_KEY"] = cat._llm.langfuse_secret_key
+            langfuse = Langfuse()
+            trace = langfuse.trace(user_id=cat.user_id, session_id=sid, tags=user_groups)
+            langfuse_handler = trace.get_langchain_handler(
+                update_parent=True  # add i/o to trace itself as well
             )
             cat._llm.callbacks = [langfuse_handler]
         except Exception as e:
             log.error(f"Error setting up Langfuse callback: {str(e)}")
-            
+
     return user_message_json
-
-
 
 
 @hook
@@ -208,8 +204,6 @@ def before_cat_sends_message(message, cat: StrayCat):
                 break
                     
     return message
-
-
 
 
 @hook
