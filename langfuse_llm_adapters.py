@@ -182,6 +182,48 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
         self.project_id = project_id
         self.location = location
     
+    def _get_or_create_credentials(self):
+        """Get existing credentials or create new ones from service account JSON."""
+        # Try to get existing credentials
+        try:
+            credentials = object.__getattribute__(self, '_credentials')
+            if credentials is not None:
+                return credentials
+        except AttributeError:
+            # Attribute doesn't exist, will create below
+            log.debug("_credentials attribute not found, creating new credentials")
+        
+        # Credentials don't exist or are None, recreate them
+        if not self.service_account_key_json:
+            log.error("Cannot create credentials: service_account_key_json is empty")
+            return None
+            
+        if not self.project_id:
+            log.error("Cannot create credentials: project_id is empty")
+            return None
+        
+        try:
+            log.info("Creating credentials from service account JSON")
+            service_account_info = json.loads(self.service_account_key_json)
+            credentials = google.oauth2.service_account.Credentials.from_service_account_info(
+                service_account_info,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            # Store for future use
+            try:
+                object.__setattr__(self, '_credentials', credentials)
+            except Exception as e:
+                log.warning(f"Could not store credentials in object: {str(e)}")
+                # Continue anyway - we have the credentials even if we can't store them
+            
+            return credentials
+        except json.JSONDecodeError as e:
+            log.error(f"Invalid JSON in service_account_key_json: {str(e)}")
+            return None
+        except Exception as e:
+            log.error(f"Error creating credentials: {str(e)}")
+            return None
+    
     def _refresh_token_if_needed(self) -> None:
         """Refresh OAuth token if expired and recreate the OpenAI clients.
         
@@ -190,7 +232,7 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
         the clients with the new token.
         """
         try:
-            credentials = object.__getattribute__(self, '_credentials')
+            credentials = self._get_or_create_credentials()
             if not credentials:
                 log.warning("No credentials available for token refresh")
                 return
