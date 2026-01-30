@@ -121,12 +121,6 @@ class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
         self.callbacks = []
 
 
-SERVICE_ACCOUNT_KEY_FILE = "/app/cat/data/tim-cdc-svi-cu00003745p1-l2-c56d1fa6bea7.json"
-PROJECT_ID = "tim-cdc-svi-cu00003745p1-l2"  
-LOCATION = "global"  
-MODEL_NAME = "openai/gpt-oss-120b-maas" #"google/gemini-3-pro-preview"
-TEMPERATURE = 1.0
-
 class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
     """Vertex OpenAI-like LLM with Langfuse integration and OAuth token management."""
     
@@ -140,7 +134,8 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
         project_id = kwargs.get('project_id', '')
         location = kwargs.get('location', 'global')
         
-        # Generate OAuth token
+        # Initialize credentials and get initial token
+        credentials = None
         token = ""
         if service_account_key_json and project_id:
             try:
@@ -155,10 +150,13 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
                 log.error(f"Error generating OAuth token: {str(e)}")
                 raise ValueError(f"Failed to authenticate with Vertex AI: {str(e)}")
         
-        # Build URL and prepare params for parent
+        # Store credentials using object.__setattr__ to bypass Pydantic validation
+        object.__setattr__(self, '_credentials', credentials)
+        
+        # Build URL
         url = f"https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/{location}/endpoints/openapi"
         
-        # Prepare params for parent init (following the same pattern as CustomOpenaiLikeWithLangfuse)
+        # Prepare params for parent init with initial token
         openai_params = {
             "openai_api_key": token,
             "url": url,
@@ -171,7 +169,7 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
 
         CustomOpenAI.__init__(self, **openai_params)
 
-        # Set additional parameters AFTER parent init (following the pattern)
+        # Set additional parameters AFTER parent init
         self.langfuse_public_key = kwargs.get('langfuse_public_key', '')
         self.langfuse_secret_key = kwargs.get('langfuse_secret_key', '')
         self.langfuse_host = kwargs.get('langfuse_host', '')
@@ -184,29 +182,72 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
         self.project_id = project_id
         self.location = location
     
-    def _get_oauth_token(self) -> str:
-        """Generate fresh OAuth token from service account credentials."""
+    def _refresh_token_if_needed(self) -> None:
+        """Refresh OAuth token if expired and recreate the OpenAI clients.
+        
+        This is necessary because LangChain's ChatOpenAI extracts the api_key value
+        during initialization and creates immutable client objects. We must recreate
+        the clients with the new token.
+        """
         try:
-            service_account_info = json.loads(self.service_account_key_json)
-            credentials = google.oauth2.service_account.Credentials.from_service_account_info(
-                service_account_info,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
-            credentials.refresh(google.auth.transport.requests.Request())
-            return credentials.token
+            credentials = object.__getattribute__(self, '_credentials')
+            if not credentials:
+                log.warning("No credentials available for token refresh")
+                return
+            
+            # Only refresh if token is invalid/expired
+            if not credentials.valid:
+                log.info("OAuth token expired, refreshing and recreating clients")
+                credentials.refresh(google.auth.transport.requests.Request())
+                new_token = credentials.token
+                
+                # Import openai here to avoid issues if it's not available at module level
+                import openai
+                
+                # Prepare client parameters (matching what LangChain does)
+                client_params = {
+                    "api_key": new_token,
+                    "base_url": self.openai_api_base,
+                    "timeout": self.request_timeout,
+                    "max_retries": self.max_retries,
+                    "default_headers": self.default_headers,
+                    "default_query": self.default_query,
+                }
+                
+                # Recreate sync client
+                if self.http_client:
+                    self.client = openai.OpenAI(
+                        **client_params, 
+                        http_client=self.http_client
+                    ).chat.completions
+                else:
+                    self.client = openai.OpenAI(**client_params).chat.completions
+                
+                # Recreate async client
+                if self.http_async_client:
+                    self.async_client = openai.AsyncOpenAI(
+                        **client_params, 
+                        http_client=self.http_async_client
+                    ).chat.completions
+                else:
+                    self.async_client = openai.AsyncOpenAI(**client_params).chat.completions
+                
+                log.info("OAuth token and OpenAI clients refreshed successfully")
+                
         except Exception as e:
-            log.error(f"Error generating OAuth token: {str(e)}")
-            raise
+            log.error(f"Error refreshing OAuth token: {str(e)}")
+            # Don't raise - allow the request to proceed with potentially stale token
+            # The API will return an auth error if the token is truly invalid
     
     def invoke(self, input, config=None, *, stop=None, **kwargs):
         """Override invoke to refresh token before each call."""
-        try:
-            fresh_token = self._get_oauth_token()
-            self.openai_api_key = fresh_token
-        except Exception as e:
-            log.error(f"Failed to refresh OAuth token: {str(e)}")
-        
+        self._refresh_token_if_needed()
         return super().invoke(input, config, stop=stop, **kwargs)
+    
+    async def ainvoke(self, input, config=None, *, stop=None, **kwargs):
+        """Override ainvoke to refresh token before each async call."""
+        self._refresh_token_if_needed()
+        return await super().ainvoke(input, config, stop=stop, **kwargs)
 
 
 class LLMOllamaConfigWithLangfuse(LLMSettings):
