@@ -20,9 +20,6 @@ import google.oauth2.service_account
 import google.auth.transport.requests
 import json
 
-import time
-import asyncio
-
 
 class ReasoningLLMMixin:
     """Mixin class that adds reasoning processing capabilities."""
@@ -285,47 +282,14 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
             # The API will return an auth error if the token is truly invalid
     
     def invoke(self, input, config=None, *, stop=None, **kwargs):
-        """Override invoke to refresh token before each call, with retry on empty response."""
-        max_retries = kwargs.pop('max_empty_retries', 3)
-        retry_delay = kwargs.pop('retry_delay', 1.0)
-        
-        for attempt in range(max_retries):
-            self._refresh_token_if_needed()
-            result = super().invoke(input, config, stop=stop, **kwargs)
-            
-            # Check if response content is empty
-            if result and getattr(result, 'content', None):
-                return result
-            
-            log.warning(
-                f"Vertex returned empty response (attempt {attempt + 1}/{max_retries})"
-            )
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay * (attempt + 1))  # backoff lineare
-        
-        log.error("Vertex returned empty response after all retries")
-        return result
+        """Override invoke to refresh token before each call."""
+        self._refresh_token_if_needed()
+        return super().invoke(input, config, stop=stop, **kwargs)
     
     async def ainvoke(self, input, config=None, *, stop=None, **kwargs):
-        """Override ainvoke to refresh token before each async call, with retry on empty response."""
-        max_retries = kwargs.pop('max_empty_retries', 3)
-        retry_delay = kwargs.pop('retry_delay', 1.0)
-        
-        for attempt in range(max_retries):
-            self._refresh_token_if_needed()
-            result = await super().ainvoke(input, config, stop=stop, **kwargs)
-            
-            if result and getattr(result, 'content', None):
-                return result
-            
-            log.warning(
-                f"Vertex returned empty response (attempt {attempt + 1}/{max_retries})"
-            )
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay * (attempt + 1))
-        
-        log.error("Vertex returned empty response after all retries")
-        return result
+        """Override ainvoke to refresh token before each async call."""
+        self._refresh_token_if_needed()
+        return await super().ainvoke(input, config, stop=stop, **kwargs)
 
 
 class LLMOllamaConfigWithLangfuse(LLMSettings):
