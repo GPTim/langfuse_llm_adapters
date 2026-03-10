@@ -5,7 +5,7 @@ from langchain_core.prompt_values import ChatPromptValue
 from langfuse import Langfuse
 from langfuse.callback import CallbackHandler
 
-from typing import Any, List, Type, Optional
+from typing import Any, List, Type, Optional, Iterator
 import re
 from pydantic import ConfigDict, field_validator, Field, model_validator, BaseModel
 from langchain_core.prompt_values import ChatPromptValue
@@ -20,6 +20,10 @@ import google.oauth2.service_account
 import google.auth.transport.requests
 import json
 
+from langchain_core.messages import AIMessageChunk, BaseMessage
+from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.outputs import ChatGenerationChunk
+from langchain_openai.chat_models.base import _convert_delta_to_message_chunk
 
 class ReasoningLLMMixin:
     """Mixin class that adds reasoning processing capabilities."""
@@ -281,6 +285,49 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
             # Don't raise - allow the request to proceed with potentially stale token
             # The API will return an auth error if the token is truly invalid
     
+    def _stream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        message_dicts, params = self._create_message_dicts(messages, stop)
+        params = {**params, **kwargs, "stream": True}
+
+        default_chunk_class = AIMessageChunk
+        with self.client.create(messages=message_dicts, **params) as response:
+            for chunk in response:
+                if not isinstance(chunk, dict):
+                    chunk = chunk.model_dump()
+                if "choices" not in chunk:
+                    log.warning(f"There are no choices {chunk}")
+                if len(chunk["choices"]) == 0:
+                    if "usage" not in chunk:
+                        log.warning(f"There are no choices before the conclusion {chunk}")
+                    continue
+                choice = chunk["choices"][0]
+                if choice["delta"] is None:
+                    continue
+                chunk = _convert_delta_to_message_chunk(
+                    choice["delta"], default_chunk_class
+                )
+                generation_info = {}
+                if finish_reason := choice.get("finish_reason"):
+                    generation_info["finish_reason"] = finish_reason
+                logprobs = choice.get("logprobs")
+                if logprobs:
+                    generation_info["logprobs"] = logprobs
+                default_chunk_class = chunk.__class__
+                chunk = ChatGenerationChunk(
+                    message=chunk, generation_info=generation_info or None
+                )
+                if run_manager:
+                    run_manager.on_llm_new_token(
+                        chunk.text, chunk=chunk, logprobs=logprobs
+                    )
+                yield chunk
+
     def invoke(self, input, config=None, *, stop=None, **kwargs):
         """Override invoke to refresh token before each call."""
         self._refresh_token_if_needed()
