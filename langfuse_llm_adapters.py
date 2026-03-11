@@ -5,7 +5,7 @@ from langchain_core.prompt_values import ChatPromptValue
 from langfuse import Langfuse
 from langfuse.callback import CallbackHandler
 
-from typing import Any, List, Type, Optional
+from typing import Any, List, Type, Optional, Iterator, Dict
 import re
 from pydantic import ConfigDict, field_validator, Field, model_validator, BaseModel
 from langchain_core.prompt_values import ChatPromptValue
@@ -19,7 +19,16 @@ from cat.looking_glass.stray_cat import StrayCat
 import google.oauth2.service_account
 import google.auth.transport.requests
 import json
+import time
 
+from langchain_core.messages import AIMessageChunk, BaseMessage
+from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
+from langchain_openai.chat_models.base import _convert_delta_to_message_chunk
+
+from langchain_core.language_models.chat_models import (
+    generate_from_stream,
+)
 
 class ReasoningLLMMixin:
     """Mixin class that adds reasoning processing capabilities."""
@@ -54,6 +63,40 @@ class ReasoningLLMMixin:
             result.content = self.remove_reasoning_section(result.content)
             
         return result
+    
+# from cat.mad_hatter.decorators import hook
+# from cat.factory.embedder import EmbedderSettings
+# from langchain_openai import OpenAIEmbeddings
+# from typing import List
+
+
+# class LlamaCppEmbedderConfig(EmbedderSettings):
+#     """Configuration for llama.cpp embedding server."""
+
+#     url: str = "http://embedder:8081/v1"
+#     model_name: str = "nomic-embed-text-v1.5"
+
+#     _pyclass = OpenAIEmbeddings
+
+#     @classmethod
+#     def get_embedder_from_config(cls, config):
+#         return OpenAIEmbeddings(
+#             openai_api_base=config.get("url", "http://embedder:8081/v1"),
+#             model=config.get("model_name", "nomic-embed-text-v1.5"),
+#             openai_api_key="not-needed",
+#         )
+
+#     model_config = {
+#         "json_schema_extra": {
+#             "humanReadableName": "Llama.cpp Embedder",
+#             "description": "Embedder using llama.cpp server with nomic-embed-text",
+#         }
+#     }
+
+
+# def factory_allowed_embedders(allowed: List[EmbedderSettings], cat) -> List:
+#     allowed.append(LlamaCppEmbedderConfig)
+#     return allowed
 
 
 class CustomOllamaWithLangfuse(ReasoningLLMMixin, CustomOllama):
@@ -119,6 +162,81 @@ class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
         self.reasoning = kwargs.get('reasoning', False)
         self.hide_reasoning_section = kwargs.get('hide_reasoning_section', True)
         self.callbacks = []
+
+
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        if kwargs.get("stream", True) and self.streaming:
+            stream_iter = self._stream(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+            return generate_from_stream(stream_iter)
+        message_dicts, params = self._create_message_dicts(messages, stop)
+        params = {**params, **kwargs}
+        max_retries = 3
+        for attempt in range(max_retries):
+            response = self.client.create(messages=message_dicts, **params)
+            if not response.choices:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                log.warning(f"API returned empty choices after all retries. Response: {response}")
+            content = response.choices[0].message.content
+            if content is None:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                log.warning(f"API returned empty choices after all retries. Response: {response}")
+            return self._create_chat_result(response)
+    
+    def _stream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        message_dicts, params = self._create_message_dicts(messages, stop)
+        params = {**params, **kwargs, "stream": True}
+
+        default_chunk_class = AIMessageChunk
+        with self.client.create(messages=message_dicts, **params) as response:
+            for chunk in response:
+                if not isinstance(chunk, dict):
+                    chunk = chunk.model_dump()
+                if "choices" not in chunk:
+                    log.warning(f"There are no choices {chunk}")
+                if len(chunk["choices"]) == 0:
+                    if "usage" not in chunk:
+                        log.warning(f"There are no choices before the conclusion {chunk}")
+                    continue
+                choice = chunk["choices"][0]
+                if choice["delta"] is None:
+                    continue
+                chunk = _convert_delta_to_message_chunk(
+                    choice["delta"], default_chunk_class
+                )
+                generation_info = {}
+                if finish_reason := choice.get("finish_reason"):
+                    generation_info["finish_reason"] = finish_reason
+                logprobs = choice.get("logprobs")
+                if logprobs:
+                    generation_info["logprobs"] = logprobs
+                default_chunk_class = chunk.__class__
+                chunk = ChatGenerationChunk(
+                    message=chunk, generation_info=generation_info or None
+                )
+                if run_manager:
+                    run_manager.on_llm_new_token(
+                        chunk.text, chunk=chunk, logprobs=logprobs
+                    )
+                yield chunk
+
 
 
 class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
@@ -280,7 +398,80 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
             log.error(f"Error refreshing OAuth token: {str(e)}")
             # Don't raise - allow the request to proceed with potentially stale token
             # The API will return an auth error if the token is truly invalid
+
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        if kwargs.get("stream", True) and self.streaming:
+            stream_iter = self._stream(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+            return generate_from_stream(stream_iter)
+        message_dicts, params = self._create_message_dicts(messages, stop)
+        params = {**params, **kwargs}
+        max_retries = 3
+        for attempt in range(max_retries):
+            response = self.client.create(messages=message_dicts, **params)
+            if not response.choices:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                log.warning(f"API returned empty choices after all retries. Response: {response}")
+            content = response.choices[0].message.content
+            if content is None:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                log.warning(f"API returned empty choices after all retries. Response: {response}")
+            return self._create_chat_result(response)
     
+    def _stream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        message_dicts, params = self._create_message_dicts(messages, stop)
+        params = {**params, **kwargs, "stream": True}
+
+        default_chunk_class = AIMessageChunk
+        with self.client.create(messages=message_dicts, **params) as response:
+            for chunk in response:
+                if not isinstance(chunk, dict):
+                    chunk = chunk.model_dump()
+                if "choices" not in chunk:
+                    log.warning(f"There are no choices {chunk}")
+                if len(chunk["choices"]) == 0:
+                    if "usage" not in chunk:
+                        log.warning(f"There are no choices before the conclusion {chunk}")
+                    continue
+                choice = chunk["choices"][0]
+                if choice["delta"] is None:
+                    continue
+                chunk = _convert_delta_to_message_chunk(
+                    choice["delta"], default_chunk_class
+                )
+                generation_info = {}
+                if finish_reason := choice.get("finish_reason"):
+                    generation_info["finish_reason"] = finish_reason
+                logprobs = choice.get("logprobs")
+                if logprobs:
+                    generation_info["logprobs"] = logprobs
+                default_chunk_class = chunk.__class__
+                chunk = ChatGenerationChunk(
+                    message=chunk, generation_info=generation_info or None
+                )
+                if run_manager:
+                    run_manager.on_llm_new_token(
+                        chunk.text, chunk=chunk, logprobs=logprobs
+                    )
+                yield chunk
+
     def invoke(self, input, config=None, *, stop=None, **kwargs):
         """Override invoke to refresh token before each call."""
         self._refresh_token_if_needed()
