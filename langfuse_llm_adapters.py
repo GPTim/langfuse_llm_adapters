@@ -22,13 +22,10 @@ import json
 import time
 
 from langchain_core.messages import AIMessageChunk, BaseMessage
+from langchain_core.messages.utils import message_chunk_to_message
 from langchain_core.callbacks import CallbackManagerForLLMRun
-from langchain_core.outputs import ChatGenerationChunk, ChatResult
+from langchain_core.outputs import ChatGenerationChunk, ChatResult, ChatGeneration
 from langchain_openai.chat_models.base import _convert_delta_to_message_chunk
-
-from langchain_core.language_models.chat_models import (
-    generate_from_stream,
-)
 
 class ReasoningLLMMixin:
     """Mixin class that adds reasoning processing capabilities."""
@@ -63,6 +60,30 @@ class ReasoningLLMMixin:
             result.content = self.remove_reasoning_section(result.content)
             
         return result
+    
+    def generate_from_stream(self, stream: Iterator[ChatGenerationChunk]) -> ChatResult:
+        generation = None
+        for chunk in stream:
+            try:
+                if generation is None:
+                    generation = chunk
+                else:
+                    generation += chunk
+            except Exception as e:
+                log.error(f"Error merging chunk, skipped: {e}", exc_info=True)
+                continue
+
+        if generation is None:
+            raise ValueError("No generations found in stream.")
+
+        return ChatResult(
+            generations=[
+                ChatGeneration(
+                    message=message_chunk_to_message(generation.message),
+                    generation_info=generation.generation_info,
+                )
+            ]
+        )
     
 # from cat.mad_hatter.decorators import hook
 # from cat.factory.embedder import EmbedderSettings
@@ -175,7 +196,7 @@ class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
             stream_iter = self._stream(
                 messages, stop=stop, run_manager=run_manager, **kwargs
             )
-            return generate_from_stream(stream_iter)
+            return self.generate_from_stream(stream_iter)
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs}
         max_retries = 3
@@ -205,38 +226,41 @@ class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
         params = {**params, **kwargs, "stream": True}
 
         default_chunk_class = AIMessageChunk
-        with self.client.create(messages=message_dicts, **params) as response:
-            for chunk in response:
-                if not isinstance(chunk, dict):
-                    chunk = chunk.model_dump()
-                if "choices" not in chunk:
-                    log.warning(f"There are no choices {chunk}")
-                if len(chunk["choices"]) == 0:
-                    if "usage" not in chunk:
-                        log.warning(f"There are no choices before the conclusion {chunk}")
-                    continue
-                choice = chunk["choices"][0]
-                if choice["delta"] is None:
-                    continue
-                chunk = _convert_delta_to_message_chunk(
-                    choice["delta"], default_chunk_class
-                )
-                generation_info = {}
-                if finish_reason := choice.get("finish_reason"):
-                    generation_info["finish_reason"] = finish_reason
-                logprobs = choice.get("logprobs")
-                if logprobs:
-                    generation_info["logprobs"] = logprobs
-                default_chunk_class = chunk.__class__
-                chunk = ChatGenerationChunk(
-                    message=chunk, generation_info=generation_info or None
-                )
-                if run_manager:
-                    run_manager.on_llm_new_token(
-                        chunk.text, chunk=chunk, logprobs=logprobs
+        try:
+            with self.client.create(messages=message_dicts, **params) as response:
+                for chunk in response:
+                    if not isinstance(chunk, dict):
+                        chunk = chunk.model_dump()
+                    if "choices" not in chunk:
+                        log.warning(f"There are no choices {chunk}")
+                        continue
+                    if len(chunk["choices"]) == 0:
+                        if "usage" not in chunk:
+                            log.warning(f"There are no choices before the conclusion {chunk}")
+                        continue
+                    choice = chunk["choices"][0]
+                    if choice["delta"] is None:
+                        continue
+                    chunk = _convert_delta_to_message_chunk(
+                        choice["delta"], default_chunk_class
                     )
-                yield chunk
-
+                    generation_info = {}
+                    if finish_reason := choice.get("finish_reason"):
+                        generation_info["finish_reason"] = finish_reason
+                    logprobs = choice.get("logprobs")
+                    if logprobs:
+                        generation_info["logprobs"] = logprobs
+                    default_chunk_class = chunk.__class__
+                    chunk = ChatGenerationChunk(
+                        message=chunk, generation_info=generation_info or None
+                    )
+                    if run_manager:
+                        run_manager.on_llm_new_token(
+                            chunk.text, chunk=chunk, logprobs=logprobs
+                        )
+                    yield chunk
+        except Exception as e:
+            log.error(f"Error merging chunk, skipped: {e}", exc_info=True)
 
 
 class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
@@ -410,7 +434,7 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
             stream_iter = self._stream(
                 messages, stop=stop, run_manager=run_manager, **kwargs
             )
-            return generate_from_stream(stream_iter)
+            return self.generate_from_stream(stream_iter)
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs}
         max_retries = 3
@@ -440,37 +464,40 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
         params = {**params, **kwargs, "stream": True}
 
         default_chunk_class = AIMessageChunk
-        with self.client.create(messages=message_dicts, **params) as response:
-            for chunk in response:
-                if not isinstance(chunk, dict):
-                    chunk = chunk.model_dump()
-                if "choices" not in chunk:
-                    log.warning(f"There are no choices {chunk}")
-                if len(chunk["choices"]) == 0:
-                    if "usage" not in chunk:
-                        log.warning(f"There are no choices before the conclusion {chunk}")
-                    continue
-                choice = chunk["choices"][0]
-                if choice["delta"] is None:
-                    continue
-                chunk = _convert_delta_to_message_chunk(
-                    choice["delta"], default_chunk_class
-                )
-                generation_info = {}
-                if finish_reason := choice.get("finish_reason"):
-                    generation_info["finish_reason"] = finish_reason
-                logprobs = choice.get("logprobs")
-                if logprobs:
-                    generation_info["logprobs"] = logprobs
-                default_chunk_class = chunk.__class__
-                chunk = ChatGenerationChunk(
-                    message=chunk, generation_info=generation_info or None
-                )
-                if run_manager:
-                    run_manager.on_llm_new_token(
-                        chunk.text, chunk=chunk, logprobs=logprobs
+        try: 
+            with self.client.create(messages=message_dicts, **params) as response:
+                for chunk in response:
+                    if not isinstance(chunk, dict):
+                        chunk = chunk.model_dump()
+                    if "choices" not in chunk:
+                        log.warning(f"There are no choices {chunk}")
+                    if len(chunk["choices"]) == 0:
+                        if "usage" not in chunk:
+                            log.warning(f"There are no choices before the conclusion {chunk}")
+                        continue
+                    choice = chunk["choices"][0]
+                    if choice["delta"] is None:
+                        continue
+                    chunk = _convert_delta_to_message_chunk(
+                        choice["delta"], default_chunk_class
                     )
-                yield chunk
+                    generation_info = {}
+                    if finish_reason := choice.get("finish_reason"):
+                        generation_info["finish_reason"] = finish_reason
+                    logprobs = choice.get("logprobs")
+                    if logprobs:
+                        generation_info["logprobs"] = logprobs
+                    default_chunk_class = chunk.__class__
+                    chunk = ChatGenerationChunk(
+                        message=chunk, generation_info=generation_info or None
+                    )
+                    if run_manager:
+                        run_manager.on_llm_new_token(
+                            chunk.text, chunk=chunk, logprobs=logprobs
+                        )
+                    yield chunk
+        except Exception as e:
+            log.error(f"Error merging chunk, skipped: {e}", exc_info=True)
 
     def invoke(self, input, config=None, *, stop=None, **kwargs):
         """Override invoke to refresh token before each call."""
