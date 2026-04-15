@@ -70,7 +70,7 @@ class ReasoningLLMMixin:
                 else:
                     generation += chunk
             except Exception as e:
-                log.error(f"Error merging chunk, skipped: {e}", exc_info=True)
+                log.error(f"Error merging chunk, skipped: {e}")
                 continue
 
         if generation is None:
@@ -260,7 +260,7 @@ class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
                         )
                     yield chunk
         except Exception as e:
-            log.error(f"Error merging chunk, skipped: {e}", exc_info=True)
+            log.error(f"Error merging chunk, skipped: {e}")
 
 
 class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
@@ -497,7 +497,7 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
                         )
                     yield chunk
         except Exception as e:
-            log.error(f"Error merging chunk, skipped: {e}", exc_info=True)
+            log.error(f"Error merging chunk, skipped: {e}")
 
     def invoke(self, input, config=None, *, stop=None, **kwargs):
         """Override invoke to refresh token before each call."""
