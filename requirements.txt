@@ -1,1 +1,1 @@
-langfuse==2.59.7
+langfuse==2.60.6
