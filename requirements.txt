@@ -1,1 +1,2 @@
 langfuse==2.60.6
+prometheus-client==0.25.0

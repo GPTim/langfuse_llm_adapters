@@ -1,0 +1,10 @@
+{
+    "name": "Prometheus Observability",
+    "version": "0.1.0",
+    "description": "Esporta metriche Prometheus per le richieste utente del Cat: durata totale, tempo cumulativo LLM, tempo cumulativo embedder, numero di chiamate LLM/embedder, TTFT, refresh OAuth Vertex, cache hit/miss embedder.",
+    "author_name": "GPTIM",
+    "author_url": "",
+    "plugin_url": "",
+    "tags": "observability, prometheus, monitoring",
+    "thumb": ""
+}

@@ -27,6 +27,9 @@ from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.outputs import ChatGenerationChunk, ChatResult, ChatGeneration
 from langchain_openai.chat_models.base import _convert_delta_to_message_chunk
 
+from .prometheus_observability.monitored_llm import MonitoredLLMMixin
+from .prometheus_observability.monitored_vertex import MonitoredVertexMixin
+
 class ReasoningLLMMixin:
     """Mixin class that adds reasoning processing capabilities."""
 
@@ -123,9 +126,9 @@ class ReasoningLLMMixin:
 class CustomOllamaWithLangfuse(ReasoningLLMMixin, CustomOllama):
     """Ollama LLM with Langfuse integration."""
     
-    langfuse_public_key: str = Field(default="")
-    langfuse_secret_key: str = Field(default="")
-    langfuse_host: str = Field(default="")
+    langfuse_public_key: str = Field(default=None)
+    langfuse_secret_key: str = Field(default=None)
+    langfuse_host: str = Field(default=None)
     reasoning: bool = Field(default=False)
     hide_reasoning_section: bool = Field(default=True)
     callbacks: List[Any] = Field(default_factory=list)
@@ -150,12 +153,12 @@ class CustomOllamaWithLangfuse(ReasoningLLMMixin, CustomOllama):
         self.callbacks = []
 
 
-class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
+class CustomOpenaiLikeWithLangfuse(MonitoredLLMMixin, ReasoningLLMMixin, CustomOpenAI):
     """OpenAI-like LLM with Langfuse integration."""
     
-    langfuse_public_key: str = Field(default="")
-    langfuse_secret_key: str = Field(default="")
-    langfuse_host: str = Field(default="")
+    langfuse_public_key: str = Field(default=None)
+    langfuse_secret_key: str = Field(default=None)
+    langfuse_host: str = Field(default=None)
     reasoning: bool = Field(default=False)
     hide_reasoning_section: bool = Field(default=True)
     callbacks: List[Any] = Field(default_factory=list)
@@ -177,9 +180,9 @@ class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
         CustomOpenAI.__init__(self, **openai_params)
 
         # Set Langfuse parameters
-        self.langfuse_public_key = kwargs.get('langfuse_public_key', '')
-        self.langfuse_secret_key = kwargs.get('langfuse_secret_key', '')
-        self.langfuse_host = kwargs.get('langfuse_host', '')
+        # self.langfuse_public_key = kwargs.get('langfuse_public_key', '')
+        # self.langfuse_secret_key = kwargs.get('langfuse_secret_key', '')
+        # self.langfuse_host = kwargs.get('langfuse_host', '')
         self.reasoning = kwargs.get('reasoning', False)
         self.hide_reasoning_section = kwargs.get('hide_reasoning_section', True)
         self.callbacks = []
@@ -193,7 +196,7 @@ class CustomOpenaiLikeWithLangfuse(ReasoningLLMMixin, CustomOpenAI):
         **kwargs: Any,
     ) -> ChatResult:
         if kwargs.get("stream", True) and self.streaming:
-            stream_iter = self._stream(
+            stream_iter = super()._stream(
                 messages, stop=stop, run_manager=run_manager, **kwargs
             )
             return self.generate_from_stream(stream_iter)
@@ -517,9 +520,9 @@ class LLMOllamaConfigWithLangfuse(LLMSettings):
     repeat_last_n: int = 64
     repeat_penalty: float = 1.1
     temperature: float = 0.1
-    langfuse_host: str
-    langfuse_public_key: str
-    langfuse_secret_key: str
+    langfuse_host: str = None
+    langfuse_public_key: str = None
+    langfuse_secret_key: str = None
     reasoning: bool = False
     hide_reasoning_section: bool = True
 
@@ -534,14 +537,15 @@ class LLMOllamaConfigWithLangfuse(LLMSettings):
 
 
 class LLMOpenaiLikeConfigWithLangfuse(LLMSettings):
+    openai_api_key: str = ""
     url: str
     model_name: str = "llama3"
     temperature: float = 0.1
     timeout: float = 3600.0
     max_tokens: int = 32768
-    langfuse_host: str
-    langfuse_public_key: str
-    langfuse_secret_key: str
+    langfuse_host: str = None
+    langfuse_public_key: str = None
+    langfuse_secret_key: str = None 
     reasoning: bool = False
     hide_reasoning_section: bool = True
     streaming: bool = True
@@ -583,9 +587,9 @@ class LLMVertexOpenaiLikeConfigWithLangfuse(LLMSettings):
     streaming: bool = Field(default=True)
     
     # Langfuse configuration
-    langfuse_host: str = Field(default="")
-    langfuse_public_key: str = Field(default="")
-    langfuse_secret_key: str = Field(default="")
+    langfuse_host: str = Field(default=None)
+    langfuse_public_key: str = Field(default=None)
+    langfuse_secret_key: str = Field(default=None)
     
     # Reasoning configuration
     reasoning: bool = Field(default=False)
@@ -614,34 +618,35 @@ class LLMVertexOpenaiLikeConfigWithLangfuse(LLMSettings):
         return v
 
 
-@hook
-def before_cat_reads_message(user_message_json, cat: StrayCat):
-    """Hook to set up Langfuse callbacks before processing user message."""
+# @hook
+# def before_cat_reads_message(user_message_json, cat: StrayCat):
+#     """Hook to set up Langfuse callbacks before processing user message."""
 
-    if hasattr(cat._llm, "langfuse_public_key"):
-        try:
-            # Get user session ID (Keycloak session ID) and groups (-> tags)
-            user_info = getattr(cat.working_memory.user_message_json, "user", None)
-            user_groups = []
-            if user_info:
-                sid = user_info.get("sid", cat.user_data.id)
-                user_groups = user_info.get('gptim', {}).get("groups", [])
-            else:
-                sid = cat.user_data.id
-            # See: https://github.com/orgs/langfuse/discussions/2658
-            os.environ["LANGFUSE_HOST"] = cat._llm.langfuse_host
-            os.environ["LANGFUSE_PUBLIC_KEY"] = cat._llm.langfuse_public_key
-            os.environ["LANGFUSE_SECRET_KEY"] = cat._llm.langfuse_secret_key
-            langfuse = Langfuse()
-            trace = langfuse.trace(user_id=cat.user_id, session_id=sid, tags=user_groups)
-            langfuse_handler = trace.get_langchain_handler(
-                update_parent=True  # add i/o to trace itself as well
-            )
-            cat._llm.callbacks = [langfuse_handler]
-        except Exception as e:
-            log.error(f"Error setting up Langfuse callback: {str(e)}")
+#     if hasattr(cat._llm, "langfuse_public_key"):
+#         try:
+#             # Get user session ID (Keycloak session ID) and groups (-> tags)
+#             user_info = getattr(cat.working_memory.user_message_json, "user", None)
+#             user_groups = []
+#             if user_info:
+#                 sid = user_info.get("sid", cat.user_data.id)
+#                 user_groups = user_info.get('gptim', {}).get("groups", [])
+#             else:
+#                 sid = cat.user_data.id
+#             # See: https://github.com/orgs/langfuse/discussions/2658
+#             os.environ["LANGFUSE_HOST"] = cat._llm.langfuse_host
+#             os.environ["LANGFUSE_PUBLIC_KEY"] = cat._llm.langfuse_public_key
+#             os.environ["LANGFUSE_SECRET_KEY"] = cat._llm.langfuse_secret_key
+#             langfuse = Langfuse()
+#             trace = langfuse.trace(user_id=cat.user_id, session_id=sid, tags=user_groups)
+#             langfuse_handler = trace.get_langchain_handler(
+#                 update_parent=True  # add i/o to trace itself as well
+#             )
+#             cat._llm.callbacks = [langfuse_handler]
+#         except Exception as e:
+#             log.error(f"Error setting up Langfuse callback: {str(e)}")
 
-    return user_message_json
+#     return user_message_json
+
 
 
 @hook
