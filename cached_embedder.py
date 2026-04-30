@@ -43,6 +43,7 @@ from langchain_core.embeddings import Embeddings
 from pydantic import ConfigDict
 
 from cat.factory.embedder import EmbedderSettings
+from cat.factory.custom_embedder import CustomOpenAIEmbeddings
 from cat.log import log
 from cat.mad_hatter.decorators import hook
 
@@ -56,7 +57,7 @@ from .prometheus_observability.request_context import (
 MAX_CACHE_SIZE = 50
 
 
-class CachedOpenAICompatibleEmbeddings(Embeddings):
+class CachedOpenAICompatibleEmbeddings(CustomOpenAIEmbeddings):
     """Embedder con cache LRU su embed_query (max 50 elementi)
     e strumentazione Prometheus integrata."""
 
