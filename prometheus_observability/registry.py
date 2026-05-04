@@ -33,92 +33,71 @@ from prometheus_client import (
 
 
 __all__ = [
-    # Funzioni
     "get_registry",
     "cleanup_dead_worker",
-    # Histogram per-richiesta
     "REQUEST_DURATION",
     "LLM_TIME_PER_REQUEST",
     "EMBEDDER_TIME_PER_REQUEST",
     "LLM_CALLS_PER_REQUEST",
     "EMBEDDER_CALLS_PER_REQUEST",
-    # Counter globali
     "LLM_CALLS_TOTAL",
     "EMBEDDER_CALLS_TOTAL",
-    # TTFT streaming
     "LLM_TTFT",
-    # Vertex OAuth
     "VERTEX_TOKEN_REFRESH_TOTAL",
     "VERTEX_TOKEN_REFRESH_DURATION",
     "ACTIVE_SESSIONS",
-    # "ACTIVE_REQUESTS",
 ]
 
 
-# ---------------------------------------------------------------------------
-# Registry selection
-# ---------------------------------------------------------------------------
-
 def get_registry() -> CollectorRegistry:
-    """Restituisce il registry corretto in base alla modalita' di deploy.
-
-    In modalita' multiprocess (PROMETHEUS_MULTIPROC_DIR settata) crea un
-    registry vuoto e ci attacca un MultiProcessCollector che a scrape time
-    legge i file mmap di tutti i worker. In modalita' single-process usa
-    il registry globale di default.
-    """
     if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
         registry = CollectorRegistry()
         multiprocess.MultiProcessCollector(registry)
         return registry
-
     from prometheus_client import REGISTRY
     return REGISTRY
 
 
-# ---------------------------------------------------------------------------
-# Metric definitions
-# ---------------------------------------------------------------------------
-#
-# Le metriche sono definite a livello di modulo: vengono create una volta
-# all'import e riusate da tutti gli hook/mixin. In modalita' multiprocess
-# il client gestisce in automatico la scrittura su file mmap condivisi.
-#
-# Naming convention: gptim_<dominio>_<unita>
-# - _seconds per durate
-# - _total per counter cumulativi
-# - histogram senza suffisso quando misurano "quanto" qualcosa per richiesta
-
 # --- Durata richieste ------------------------------------------------------
+# Range tipico: 0.5s (small talk) - 5min (deep search). Granularita' fine
+# soprattutto tra 1-30s dove cade la maggior parte delle richieste reali.
 
 REQUEST_DURATION = Histogram(
     "gptim_request_duration_seconds",
     "Durata totale di una richiesta utente, dall'arrivo del messaggio "
     "(before_cat_reads_message) all'invio della risposta "
     "(before_cat_sends_message).",
-    buckets=(0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300),
+    buckets=(
+        0.1, 0.25, 0.5, 0.75,
+        1, 1.5, 2, 3, 4, 5, 7.5,
+        10, 15, 20, 25, 30, 45,
+        60, 70, 80, 90, 120, 180, 300, 600,
+    ),
 )
 
 # --- Tempo cumulativo LLM/embedder per richiesta ---------------------------
-#
-# NOTA IMPORTANTE: queste metriche misurano il *wall-time accumulato* di
-# tutte le chiamate effettuate durante una singola richiesta. Per via del
-# parallelismo nel deep search (ThreadPoolExecutor che chiama l'LLM in
-# parallelo sui chunk), il valore puo' eccedere la durata della richiesta
-# stessa: e' atteso e rappresenta le "ore-LLM" consumate dal turno.
 
 LLM_TIME_PER_REQUEST = Histogram(
     "gptim_llm_time_per_request_seconds",
     "Wall-time cumulativo speso in chiamate LLM in una singola richiesta. "
     "In presenza di parallelismo (deep search) puo' superare la durata "
     "totale della richiesta.",
-    buckets=(0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300),
+    buckets=(
+        0.1, 0.25, 0.5, 0.75,
+        1, 1.5, 2, 3, 4, 5, 7.5,
+        10, 15, 20, 25, 30, 40, 45,
+        60, 70, 80, 90, 120, 180, 300, 600,
+    ),
 )
 
 EMBEDDER_TIME_PER_REQUEST = Histogram(
     "gptim_embedder_time_per_request_seconds",
     "Wall-time cumulativo speso in chiamate embedder in una singola richiesta.",
-    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
+    buckets=(
+        0.005, 0.01, 0.025, 0.05, 0.075,
+        0.1, 0.15, 0.25, 0.5, 0.75,
+        1, 1.5, 2, 3, 5, 7.5, 10, 12.5, 15,
+    ),
 )
 
 # --- Numero di chiamate ----------------------------------------------------
@@ -136,7 +115,7 @@ LLM_CALLS_PER_REQUEST = Histogram(
     "gptim_llm_calls_per_request",
     "Numero di chiamate LLM effettuate in una singola richiesta. Utile "
     "per identificare richieste in loop di deep search.",
-    buckets=(1, 2, 3, 5, 10, 20, 50, 100),
+    buckets=(1, 2, 3, 4, 5, 6),
 )
 
 EMBEDDER_CALLS_TOTAL = Counter(
@@ -152,7 +131,7 @@ EMBEDDER_CALLS_TOTAL = Counter(
 EMBEDDER_CALLS_PER_REQUEST = Histogram(
     "gptim_embedder_calls_per_request",
     "Numero di chiamate embedder per singola richiesta (incluse le cache hit).",
-    buckets=(1, 2, 5, 10, 20, 50, 100),
+    buckets=(1, 2, 3, 4, 5, 6),
 )
 
 # --- Time To First Token (streaming) ---------------------------------------
@@ -162,7 +141,10 @@ LLM_TTFT = Histogram(
     "Time To First Token: tempo tra l'invio della richiesta all'LLM e "
     "la ricezione del primo chunk con contenuto non vuoto. Misurato solo "
     "nelle chiamate in streaming dentro a una richiesta tracciata.",
-    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
+    buckets=(
+        0.05, 0.1, 0.15, 0.25, 0.4,
+        0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7.5, 10, 12.5, 15,
+    ),
 )
 
 # --- Refresh OAuth Vertex --------------------------------------------------
@@ -179,34 +161,18 @@ VERTEX_TOKEN_REFRESH_DURATION = Histogram(
     "gptim_vertex_token_refresh_duration_seconds",
     "Durata di un refresh del token OAuth Vertex AI (rete + ricreazione "
     "dei client OpenAI).",
-    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5),
 )
 
 
 ACTIVE_SESSIONS = Gauge(
     "gptim_active_sessions",
     "Numero di sessioni utente attualmente aperte (websocket connessi).",
-    multiprocess_mode="mostrecent",  # importante in multiproc
+    multiprocess_mode="mostrecent",
 )
 
-# ACTIVE_REQUESTS = Gauge(
-#     "gptim_active_requests",
-#     "Numero di richieste attualmente in elaborazione.",
-#     multiprocess_mode="livesum",
-# )
-
-# ---------------------------------------------------------------------------
-# Multiprocess cleanup
-# ---------------------------------------------------------------------------
 
 def cleanup_dead_worker(pid: Optional[int] = None) -> None:
-    """Rimuove i file mmap di un worker terminato.
-
-    Va chiamato dall'hook child_exit di gunicorn/uvicorn. Senza questo
-    cleanup i file dei worker morti restano nel multiproc dir e
-    contaminano le aggregazioni a scrape time (counter "fantasma" che
-    non aumentano mai piu' ma vengono comunque sommati).
-    """
     if "PROMETHEUS_MULTIPROC_DIR" not in os.environ:
         return
     if pid is None:
@@ -214,5 +180,4 @@ def cleanup_dead_worker(pid: Optional[int] = None) -> None:
     try:
         multiprocess.mark_process_dead(pid)
     except Exception:
-        # In caso di errore non vogliamo bloccare lo shutdown del worker.
         pass
