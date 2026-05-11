@@ -8,6 +8,7 @@ from langfuse.callback import CallbackHandler
 from typing import Any, List, Type, Optional, Iterator, Dict
 import re
 from pydantic import ConfigDict, field_validator, Field, model_validator, BaseModel
+from pydantic.fields import FieldInfo
 from langchain_core.prompt_values import ChatPromptValue
 
 from cat.factory.custom_llm import CustomOllama, CustomOpenAI
@@ -88,6 +89,15 @@ class ReasoningLLMMixin:
             ]
         )
     
+class WithChangesMixin:
+    def with_changes(self, **kwargs):
+        params = {
+            k: v for k, v in self.__dict__.items()
+            if not k.startswith('_') and not isinstance(v, FieldInfo)
+        }
+        params.update(kwargs)
+        return self.__class__(**params)
+    
 # from cat.mad_hatter.decorators import hook
 # from cat.factory.embedder import EmbedderSettings
 # from langchain_openai import OpenAIEmbeddings
@@ -153,7 +163,7 @@ class CustomOllamaWithLangfuse(ReasoningLLMMixin, CustomOllama):
         self.callbacks = []
 
 
-class CustomOpenaiLikeWithLangfuse(MonitoredLLMMixin, ReasoningLLMMixin, CustomOpenAI):
+class CustomOpenaiLikeWithLangfuse(MonitoredLLMMixin, ReasoningLLMMixin, WithChangesMixin, CustomOpenAI):
     """OpenAI-like LLM with Langfuse integration."""
     
     langfuse_public_key: str = Field(default=None)
@@ -162,11 +172,12 @@ class CustomOpenaiLikeWithLangfuse(MonitoredLLMMixin, ReasoningLLMMixin, CustomO
     reasoning: bool = Field(default=False)
     hide_reasoning_section: bool = Field(default=True)
     callbacks: List[Any] = Field(default_factory=list)
+    vlm_model: str = Field(default="")
     
     def __init__(self, **kwargs: Any) -> None:
         if "url" in kwargs and kwargs["url"].endswith("/"):
             kwargs["url"] = kwargs["url"][:-1]
-            
+                
         openai_params = {
             "openai_api_key":  kwargs.get("openai_api_key", "meow"),
             "url": kwargs.get("url"),
@@ -186,6 +197,7 @@ class CustomOpenaiLikeWithLangfuse(MonitoredLLMMixin, ReasoningLLMMixin, CustomO
         self.reasoning = kwargs.get('reasoning', False)
         self.hide_reasoning_section = kwargs.get('hide_reasoning_section', True)
         self.callbacks = []
+        self.vlm_model = kwargs.get('vlm_model', '')
 
 
     def _generate(
@@ -326,6 +338,9 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
         self.service_account_key_json = service_account_key_json
         self.project_id = project_id
         self.location = location
+
+        self.vlm_model = kwargs.get('vlm_model', '')
+
     
     def _get_or_create_credentials(self):
         """Get existing credentials or create new ones from service account JSON."""
@@ -549,6 +564,12 @@ class LLMOpenaiLikeConfigWithLangfuse(LLMSettings):
     reasoning: bool = False
     hide_reasoning_section: bool = True
     streaming: bool = True
+    
+    # VLM model
+    vlm_model: str = Field(
+        default="google/gemma-4-26b-a4b-it-maas",
+        description="VLM name to use for image processing"
+    )
 
     _pyclass: Type = CustomOpenaiLikeWithLangfuse
     
@@ -594,6 +615,12 @@ class LLMVertexOpenaiLikeConfigWithLangfuse(LLMSettings):
     # Reasoning configuration
     reasoning: bool = Field(default=False)
     hide_reasoning_section: bool = Field(default=True)
+
+    # VLM model
+    vlm_model: str = Field(
+        default="google/gemma-4-26b-a4b-it-maas",
+        description="VLM name to use for image processing"
+    )
 
     _pyclass: Type = CustomVertexOpenaiLikeWithLangfuse
     
