@@ -35,14 +35,26 @@ from .prometheus_observability.registry import (
 )
 
 from prometheus_client import Gauge
+from qdrant_client.http.models import (
+    Filter,
+    FieldCondition,
+    MatchValue,
+)
+
 
 FILES_TO_PROCESS = Gauge(
     "rag_documents_to_be_processed",
     "Documents with supported extensions in files directory",
-    multiprocess_mode="liveall"  # oppure "livesum"
+    multiprocess_mode="max"
 )
 
-def update_files_gauge(files_path: str = "/app/cat/data/files"):
+FILES_IN_PROCESS = Gauge(
+    "rag_documents_on_going",
+    "Documents with on_going status in Qdrant",
+    multiprocess_mode="max"
+)
+
+def update_files_to_process_gauge(files_path: str = "/app/cat/data/files"):
     result = subprocess.run(
         [
             "find", files_path, "-type", "f",
@@ -59,6 +71,23 @@ def update_files_gauge(files_path: str = "/app/cat/data/files"):
     count = len(result.stdout.strip().splitlines())
     FILES_TO_PROCESS.set(count)
 
+def update_files_in_process_gauge(cat, collection: str = "documents") -> None:
+    """
+    Registra il collector solo se non è già presente.
+    Da chiamare una volta sola all'avvio del plugin/servizio.
+    """
+    client = cat.memory.vectors.vector_db
+    count = client.count(
+        collection_name=collection,
+        count_filter=Filter(
+            must=[FieldCondition(
+                key="status",
+                match=MatchValue(value="ON_GOING")
+            )]
+        ),
+        exact=True
+    ).count
+    FILES_IN_PROCESS.set(count)
 
 # ---------- Lifecycle hooks ----------
 
@@ -129,9 +158,11 @@ def prometheus_metrics():
       il Cat dietro un reverse proxy che restringe /metrics per IP/network.
     - In multi-worker l'aggregazione e' automatica via MultiProcessCollector.
     """
-    update_files_gauge()
     from cat.looking_glass.cheshire_cat import CheshireCat
-    app = CheshireCat().fastapi_app
+    cat = CheshireCat()
+    update_files_to_process_gauge()
+    update_files_in_process_gauge(cat=cat)
+    app = cat.fastapi_app
     ws_manager = app.state.websocket_manager
     ACTIVE_SESSIONS.set(float(len(ws_manager.connections)))
     registry = get_registry()
