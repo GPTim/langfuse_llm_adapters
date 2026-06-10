@@ -20,6 +20,7 @@ from cat.mad_hatter.decorators import hook, endpoint
 from cat.log import log
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi import Response
+import subprocess
 
 from .prometheus_observability import request_context
 from .prometheus_observability.registry import (
@@ -32,6 +33,31 @@ from .prometheus_observability.registry import (
     EMBEDDER_CALLS_PER_REQUEST,
     ACTIVE_SESSIONS
 )
+
+from prometheus_client import Gauge
+
+FILES_TO_PROCESS = Gauge(
+    "rag_documents_to_be_processed",
+    "Documents with supported extensions in files directory",
+    multiprocess_mode="liveall"  # oppure "livesum"
+)
+
+def update_files_gauge(files_path: str = "/app/cat/data/files"):
+    result = subprocess.run(
+        [
+            "find", files_path, "-type", "f",
+            "(", "-name", "*.docx",
+            "-o", "-name", "*.pdf",
+            "-o", "-name", "*.pptx",
+            "-o", "-name", "*.zip",
+            "-o", "-name", "*.md",
+            "-o", "-name", "*.txt",
+            ")"
+        ],
+        capture_output=True, text=True
+    )
+    count = len(result.stdout.strip().splitlines())
+    FILES_TO_PROCESS.set(count)
 
 
 # ---------- Lifecycle hooks ----------
@@ -103,6 +129,7 @@ def prometheus_metrics():
       il Cat dietro un reverse proxy che restringe /metrics per IP/network.
     - In multi-worker l'aggregazione e' automatica via MultiProcessCollector.
     """
+    update_files_gauge()
     from cat.looking_glass.cheshire_cat import CheshireCat
     app = CheshireCat().fastapi_app
     ws_manager = app.state.websocket_manager
