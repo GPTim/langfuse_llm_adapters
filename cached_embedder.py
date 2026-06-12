@@ -55,7 +55,12 @@ from .prometheus_observability.request_context import (
 
 
 MAX_CACHE_SIZE = 50
-
+_EMBEDDER_TIMEOUT = httpx.Timeout(
+    connect=30.0,
+    read=240.0,
+    write=60.0,
+    pool=5.0,
+)
 
 class CachedOpenAICompatibleEmbeddings(CustomOpenAIEmbeddings):
     """Embedder con cache LRU su embed_query (max 50 elementi)
@@ -90,7 +95,7 @@ class CachedOpenAICompatibleEmbeddings(CustomOpenAIEmbeddings):
                 # Miss: chiamata HTTP all'embedder remoto.
                 log.debug(f"[cached-embedder] MISS (cache size: {len(self._cache)})")
                 payload = json.dumps({"input": text})
-                ret = httpx.post(self.url, data=payload, timeout=None)
+                ret = httpx.post(self.url, data=payload, timeout=_EMBEDDER_TIMEOUT)
                 ret.raise_for_status()
                 embedding = ret.json()["data"][0]["embedding"]
 
@@ -150,7 +155,7 @@ class CachedOpenAICompatibleEmbeddings(CustomOpenAIEmbeddings):
             if missing_texts:
                 log.debug(f"[cached-embedder] MISS {len(missing_texts)} docs")
                 payload = json.dumps({"input": missing_texts})
-                ret = httpx.post(self.url, data=payload, timeout=None)
+                ret = httpx.post(self.url, data=payload, timeout=_EMBEDDER_TIMEOUT)
                 ret.raise_for_status()
                 embeddings = [e["embedding"] for e in ret.json()["data"]]
 
