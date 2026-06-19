@@ -39,7 +39,6 @@ from collections import OrderedDict
 from typing import List, Type, Optional
 
 import httpx
-from langchain_core.embeddings import Embeddings
 from pydantic import ConfigDict
 
 from cat.factory.embedder import EmbedderSettings
@@ -55,6 +54,8 @@ from .prometheus_observability.request_context import (
 
 
 MAX_CACHE_SIZE = 50
+MAX_ATTEMPTS = 5
+
 _EMBEDDER_TIMEOUT = httpx.Timeout(
     connect=30.0,
     read=240.0,
@@ -62,14 +63,13 @@ _EMBEDDER_TIMEOUT = httpx.Timeout(
     pool=5.0,
 )
 
+
 class CachedOpenAICompatibleEmbeddings(CustomOpenAIEmbeddings):
     """Embedder con cache LRU su embed_query (max 50 elementi)
     e strumentazione Prometheus integrata."""
 
     def __init__(self, url: str):
         self.url = os.path.join(url, "v1/embeddings")
-        # OrderedDict per implementare LRU: spostiamo in fondo gli elementi
-        # acceduti di recente ed evictiamo dalla testa.
         self._cache: "OrderedDict[str, List[float]]" = OrderedDict()
 
     # ------------------------------------------------------------------ #
@@ -77,45 +77,43 @@ class CachedOpenAICompatibleEmbeddings(CustomOpenAIEmbeddings):
     # ------------------------------------------------------------------ #
 
     def embed_query(self, text: str) -> List[float]:
-        # Determiniamo PRIMA se e' hit o miss, perche' subito dopo la
-        # cache viene mutata (move_to_end / inserimento) e l'info viene
-        # persa.
         is_hit = text in self._cache
         tracking = is_tracking_active()
-
         start = time.monotonic() if tracking else None
 
         try:
             if is_hit:
-                # Hit: ritorniamo dalla cache, aggiornando l'ordine LRU.
                 self._cache.move_to_end(text)
                 log.debug(f"[cached-embedder] HIT (cache size: {len(self._cache)})")
-                embedding = self._cache[text]
-            else:
-                # Miss: chiamata HTTP all'embedder remoto.
-                log.debug(f"[cached-embedder] MISS (cache size: {len(self._cache)})")
-                payload = json.dumps({"input": text})
-                ret = httpx.post(self.url, data=payload, timeout=_EMBEDDER_TIMEOUT)
-                ret.raise_for_status()
-                embedding = ret.json()["data"][0]["embedding"]
+                return self._cache[text]
 
-                # Salviamo in cache e applichiamo politica di eviction LRU.
-                self._cache[text] = embedding
-                if len(self._cache) > MAX_CACHE_SIZE:
-                    self._cache.popitem(last=False)
+            log.debug(f"[cached-embedder] MISS (cache size: {len(self._cache)})")
+            payload = json.dumps({"input": text})
+
+            for attempt in range(MAX_ATTEMPTS):
+                try:
+                    ret = httpx.post(self.url, data=payload, timeout=_EMBEDDER_TIMEOUT)
+                    ret.raise_for_status()
+                    embedding = ret.json()["data"][0]["embedding"]
+                    break
+                except Exception as e:
+                    if attempt == MAX_ATTEMPTS - 1:
+                        raise
+                    wait = 2 ** attempt
+                    log.warning(f"[cached-embedder] embed_query attempt {attempt + 1} failed: {e}, retry in {wait}s")
+                    time.sleep(wait)
+
+            self._cache[text] = embedding
+            if len(self._cache) > MAX_CACHE_SIZE:
+                self._cache.popitem(last=False)
 
             return embedding
 
         finally:
-            # Strumentazione: solo se siamo in una richiesta tracciata.
-            # Va in finally per coprire anche il caso di eccezione HTTP
-            # (counter incrementato comunque, durata realistica).
             if tracking:
                 duration = time.monotonic() - start
                 cache_label = "hit" if is_hit else "miss"
-                EMBEDDER_CALLS_TOTAL.labels(
-                    method="query", cache=cache_label
-                ).inc()
+                EMBEDDER_CALLS_TOTAL.labels(method="query", cache=cache_label).inc()
                 metrics = get_current()
                 if metrics is not None:
                     metrics.add_embedder_call(duration)
@@ -127,9 +125,6 @@ class CachedOpenAICompatibleEmbeddings(CustomOpenAIEmbeddings):
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         tracking = is_tracking_active()
 
-        # Conteggio hit/miss PRIMA di mutare la cache, altrimenti dopo
-        # super() i nuovi miss diventerebbero hit e i numeri sarebbero
-        # falsati.
         if tracking:
             hits = sum(1 for t in texts if t in self._cache)
             misses = len(texts) - hits
@@ -155,9 +150,19 @@ class CachedOpenAICompatibleEmbeddings(CustomOpenAIEmbeddings):
             if missing_texts:
                 log.debug(f"[cached-embedder] MISS {len(missing_texts)} docs")
                 payload = json.dumps({"input": missing_texts})
-                ret = httpx.post(self.url, data=payload, timeout=_EMBEDDER_TIMEOUT)
-                ret.raise_for_status()
-                embeddings = [e["embedding"] for e in ret.json()["data"]]
+
+                for attempt in range(MAX_ATTEMPTS):
+                    try:
+                        ret = httpx.post(self.url, data=payload, timeout=_EMBEDDER_TIMEOUT)
+                        ret.raise_for_status()
+                        embeddings = [e["embedding"] for e in ret.json()["data"]]
+                        break
+                    except Exception as e:
+                        if attempt == MAX_ATTEMPTS - 1:
+                            raise
+                        wait = 2 ** attempt
+                        log.warning(f"[cached-embedder] embed_documents attempt {attempt + 1} failed: {e}, retry in {wait}s")
+                        time.sleep(wait)
 
                 for idx, text, emb in zip(missing_indices, missing_texts, embeddings):
                     self._cache[text] = emb
@@ -170,21 +175,10 @@ class CachedOpenAICompatibleEmbeddings(CustomOpenAIEmbeddings):
         finally:
             if tracking:
                 duration = time.monotonic() - start
-                # Counter globale: incrementato per ogni testo, distinguendo
-                # hit da miss (i miss generano la chiamata HTTP, gli hit no).
                 if hits:
-                    EMBEDDER_CALLS_TOTAL.labels(
-                        method="documents", cache="hit"
-                    ).inc(hits)
+                    EMBEDDER_CALLS_TOTAL.labels(method="documents", cache="hit").inc(hits)
                 if misses:
-                    EMBEDDER_CALLS_TOTAL.labels(
-                        method="documents", cache="miss"
-                    ).inc(misses)
-
-                # Per-richiesta: una sola wall-time (la chiamata HTTP e'
-                # una sola se ci sono miss, zero se tutto cached). Il
-                # counter per-richiesta invece si incrementa di len(texts)
-                # per coerenza con il counter globale.
+                    EMBEDDER_CALLS_TOTAL.labels(method="documents", cache="miss").inc(misses)
                 metrics = get_current()
                 if metrics is not None:
                     metrics.embedder_total_time += duration
