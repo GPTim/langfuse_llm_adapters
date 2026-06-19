@@ -556,7 +556,7 @@ class LLMOpenaiLikeConfigWithLangfuse(LLMSettings):
     url: str
     model_name: str = "llama3"
     temperature: float = 0.1
-    timeout: float = 3600.0
+    timeout: float = 60.0
     max_tokens: int = 32768
     langfuse_host: str = None
     langfuse_public_key: str = None
@@ -603,7 +603,7 @@ class LLMVertexOpenaiLikeConfigWithLangfuse(LLMSettings):
         ge=0.0,
         le=2.0
     )
-    timeout: float = Field(default=3600.0)
+    timeout: float = Field(default=60.0)
     max_tokens: int = Field(default=32768)
     streaming: bool = Field(default=True)
     
