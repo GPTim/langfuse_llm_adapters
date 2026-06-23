@@ -191,9 +191,9 @@ class CustomOpenaiLikeWithLangfuse(MonitoredLLMMixin, ReasoningLLMMixin, WithCha
         CustomOpenAI.__init__(self, **openai_params)
 
         # Set Langfuse parameters
-        # self.langfuse_public_key = kwargs.get('langfuse_public_key', '')
-        # self.langfuse_secret_key = kwargs.get('langfuse_secret_key', '')
-        # self.langfuse_host = kwargs.get('langfuse_host', '')
+        self.langfuse_public_key = kwargs.get('langfuse_public_key', '')
+        self.langfuse_secret_key = kwargs.get('langfuse_secret_key', '')
+        self.langfuse_host = kwargs.get('langfuse_host', '')
         self.reasoning = kwargs.get('reasoning', False)
         self.hide_reasoning_section = kwargs.get('hide_reasoning_section', True)
         self.callbacks = []
@@ -645,34 +645,34 @@ class LLMVertexOpenaiLikeConfigWithLangfuse(LLMSettings):
         return v
 
 
-# @hook
-# def before_cat_reads_message(user_message_json, cat: StrayCat):
-#     """Hook to set up Langfuse callbacks before processing user message."""
+@hook
+def before_cat_reads_message(user_message_json, cat: StrayCat):
+    """Hook to set up Langfuse callbacks before processing user message."""
 
-#     if hasattr(cat._llm, "langfuse_public_key"):
-#         try:
-#             # Get user session ID (Keycloak session ID) and groups (-> tags)
-#             user_info = getattr(cat.working_memory.user_message_json, "user", None)
-#             user_groups = []
-#             if user_info:
-#                 sid = user_info.get("sid", cat.user_data.id)
-#                 user_groups = user_info.get('gptim', {}).get("groups", [])
-#             else:
-#                 sid = cat.user_data.id
-#             # See: https://github.com/orgs/langfuse/discussions/2658
-#             os.environ["LANGFUSE_HOST"] = cat._llm.langfuse_host
-#             os.environ["LANGFUSE_PUBLIC_KEY"] = cat._llm.langfuse_public_key
-#             os.environ["LANGFUSE_SECRET_KEY"] = cat._llm.langfuse_secret_key
-#             langfuse = Langfuse()
-#             trace = langfuse.trace(user_id=cat.user_id, session_id=sid, tags=user_groups)
-#             langfuse_handler = trace.get_langchain_handler(
-#                 update_parent=True  # add i/o to trace itself as well
-#             )
-#             cat._llm.callbacks = [langfuse_handler]
-#         except Exception as e:
-#             log.error(f"Error setting up Langfuse callback: {str(e)}")
+    if hasattr(cat._llm, "langfuse_public_key"):
+        try:
+            # Get user session ID (Keycloak session ID) and groups (-> tags)
+            user_info = getattr(cat.working_memory.user_message_json, "user", None)
+            user_groups = []
+            if user_info:
+                sid = user_info.get("sid", cat.user_data.id)
+                user_groups = user_info.get('gptim', {}).get("groups", [])
+            else:
+                sid = cat.user_data.id
+            # See: https://github.com/orgs/langfuse/discussions/2658
+            os.environ["LANGFUSE_HOST"] = cat._llm.langfuse_host
+            os.environ["LANGFUSE_PUBLIC_KEY"] = cat._llm.langfuse_public_key
+            os.environ["LANGFUSE_SECRET_KEY"] = cat._llm.langfuse_secret_key
+            langfuse = Langfuse()
+            trace = langfuse.trace(user_id=cat.user_id, session_id=sid, tags=user_groups)
+            langfuse_handler = trace.get_langchain_handler(
+                update_parent=True  # add i/o to trace itself as well
+            )
+            cat._llm.callbacks = [langfuse_handler]
+        except Exception as e:
+            log.error(f"Error setting up Langfuse callback: {str(e)}")
 
-#     return user_message_json
+    return user_message_json
 
 
 
