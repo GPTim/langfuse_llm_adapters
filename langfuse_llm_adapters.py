@@ -160,7 +160,7 @@ class CustomOllamaWithLangfuse(ReasoningLLMMixin, CustomOllama):
         self.langfuse_host = kwargs.get('langfuse_host', '')
         self.reasoning = kwargs.get('reasoning', False)
         self.hide_reasoning_section = kwargs.get('hide_reasoning_section', True)
-        self.callbacks = []
+        self.callbacks = kwargs.get('callbacks', [])
 
 
 class CustomOpenaiLikeWithLangfuse(MonitoredLLMMixin, ReasoningLLMMixin, WithChangesMixin, CustomOpenAI):
@@ -196,7 +196,7 @@ class CustomOpenaiLikeWithLangfuse(MonitoredLLMMixin, ReasoningLLMMixin, WithCha
         self.langfuse_host = kwargs.get('langfuse_host', '')
         self.reasoning = kwargs.get('reasoning', False)
         self.hide_reasoning_section = kwargs.get('hide_reasoning_section', True)
-        self.callbacks = []
+        self.callbacks = kwargs.get('callbacks', [])
         self.vlm_model = kwargs.get('vlm_model', '')
 
 
@@ -332,7 +332,7 @@ class CustomVertexOpenaiLikeWithLangfuse(CustomOpenaiLikeWithLangfuse):
         self.langfuse_host = kwargs.get('langfuse_host', '')
         self.reasoning = kwargs.get('reasoning', False)
         self.hide_reasoning_section = kwargs.get('hide_reasoning_section', True)
-        self.callbacks = []
+        self.callbacks = kwargs.get('callbacks', [])
         
         # Set Vertex-specific params
         self.service_account_key_json = service_account_key_json

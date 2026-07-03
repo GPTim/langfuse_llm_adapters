@@ -58,7 +58,7 @@ MAX_ATTEMPTS = 5
 
 _EMBEDDER_TIMEOUT = httpx.Timeout(
     connect=30.0,
-    read=240.0,
+    read=9000.0,
     write=60.0,
     pool=5.0,
 )
