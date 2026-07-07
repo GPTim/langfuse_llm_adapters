@@ -15,6 +15,8 @@ Esposto via @endpoint del Cat, restituisce il payload in formato text-based
 Prometheus exposition. In modalita' multi-worker (PROMETHEUS_MULTIPROC_DIR
 settato) l'endpoint aggrega automaticamente tutti i worker.
 """
+from datetime import datetime, timezone
+import os
 
 from cat.mad_hatter.decorators import hook, endpoint
 from cat.log import log
@@ -54,6 +56,15 @@ FILES_IN_PROCESS = Gauge(
     multiprocess_mode="max"
 )
 
+PROCESSING_FILE_AGE_SECONDS = Gauge(
+    "rag_document_on_going_age_seconds",
+    "Age in seconds of each document currently in ON_GOING",
+    ["file_name", "point_id"],
+    multiprocess_mode="max"
+)
+
+_PROCESSING_FILE_LABELS = set()
+
 def update_files_to_process_gauge(files_path: str = "/app/cat/data/files"):
     result = subprocess.run(
         [
@@ -71,23 +82,126 @@ def update_files_to_process_gauge(files_path: str = "/app/cat/data/files"):
     count = len(result.stdout.strip().splitlines())
     FILES_TO_PROCESS.set(count)
 
-def update_files_in_process_gauge(cat, collection: str = "documents") -> None:
+def update_files_in_process_gauge(cat, collection: str = "documents"):
     """
-    Registra il collector solo se non è già presente.
-    Da chiamare una volta sola all'avvio del plugin/servizio.
+    Recupera tutti i documenti ON_GOING da Qdrant tramite scroll,
+    aggiorna FILES_IN_PROCESS e ritorna la lista dei punti trovati.
     """
     client = cat.memory.vectors.vector_db
-    count = client.count(
-        collection_name=collection,
-        count_filter=Filter(
-            must=[FieldCondition(
+
+    on_going_filter = Filter(
+        must=[
+            FieldCondition(
                 key="status",
                 match=MatchValue(value="ON_GOING")
-            )]
-        ),
-        exact=True
-    ).count
-    FILES_IN_PROCESS.set(count)
+            )
+        ]
+    )
+
+    points = []
+    offset = None
+
+    while True:
+        batch, next_offset = client.scroll(
+            collection_name=collection,
+            scroll_filter=on_going_filter,
+            limit=256,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+
+        points.extend(batch)
+
+        if next_offset is None:
+            break
+
+        offset = next_offset
+
+    FILES_IN_PROCESS.set(len(points))
+
+    return points
+
+def _parse_datetime(value):
+    """
+    Converte processing_started_at in datetime timezone-aware.
+    Supporta formato ISO/RFC3339 tipo:
+    2026-07-07T10:30:00Z
+    """
+    if not value:
+        return None
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    return None
+
+def update_processing_file_age_seconds(on_going_points) -> None:
+    """
+    Prende i punti ON_GOING restituiti da update_files_in_process_gauge()
+    e aggiorna la metrica per-file:
+
+    rag_document_on_going_age_seconds{file_name="...", point_id="..."} 12345
+    """
+    global _PROCESSING_FILE_LABELS
+
+    now = datetime.now(timezone.utc)
+    current_labels = set()
+
+    for point in on_going_points:
+        payload = point.payload or {}
+
+        point_id = str(point.id)
+        file_name = _get_file_name(payload, point_id)
+
+        started_at_raw = payload.get("updatedAt")
+        started_at = _parse_datetime(started_at_raw)
+
+        if started_at is None:
+            age_seconds = 0
+        else:
+            age_seconds = max(0, int((now - started_at).total_seconds()))
+
+        PROCESSING_FILE_AGE_SECONDS.labels(
+            file_name=file_name,
+            point_id=point_id,
+        ).set(age_seconds)
+
+        current_labels.add((file_name, point_id))
+
+    # Pulizia label vecchie, utile quando un file non è più ON_GOING.
+    # Nota: in modalità multiprocess Prometheus questa pulizia può non essere perfetta.
+    stale_labels = _PROCESSING_FILE_LABELS - current_labels
+
+    for file_name, point_id in stale_labels:
+        try:
+            PROCESSING_FILE_AGE_SECONDS.remove(file_name, point_id)
+        except Exception as e:
+            log.debug(
+                f"[prometheus_observability] failed to remove stale processing file metric "
+                f"file_name={file_name}, point_id={point_id}: {e}"
+            )
+
+    _PROCESSING_FILE_LABELS = current_labels
+
+def _get_file_name(payload: dict, point_id) -> str:
+    """
+    Adatta qui le chiavi in base a come salvi il nome file nel payload Qdrant.
+    """
+    raw_name = (
+        payload.get("filename")
+        or str(point_id)
+    )
+
+    return os.path.basename(str(raw_name))
 
 # ---------- Lifecycle hooks ----------
 
@@ -161,7 +275,8 @@ def prometheus_metrics():
     from cat.looking_glass.cheshire_cat import CheshireCat
     cat = CheshireCat()
     update_files_to_process_gauge()
-    update_files_in_process_gauge(cat=cat)
+    on_going_points = update_files_in_process_gauge(cat=cat)
+    update_processing_file_age_seconds(on_going_points)
     app = cat.fastapi_app
     ws_manager = app.state.websocket_manager
     ACTIVE_SESSIONS.set(float(len(ws_manager.connections)))
